@@ -307,20 +307,188 @@ int fs_lseek(int fd, size_t offset)
 	return 0;
 }
 
+/* Helper function to get index of data block */
+int get_data_block_index(uint16_t start_block, size_t offset){
+	size_t skip = offset / BLOCK_SIZE;
+	uint16_t curr = start_block;
+
+	while(skip > 0 && curr != FAT_EOC){
+		curr = fat[curr];
+		skip--;
+	}
+
+	if(curr == FAT_EOC){
+		return -1;
+	}
+
+	return curr;
+}
+
+/* Helper function to allocate new data block */
+int allocate_new_block(uint16_t *last){
+	for(int i = 0; i < sb.data_blocks; i++){
+		if(fat[i] == 0){
+			fat[i] = FAT_EOC;
+			if(*last != FAT_EOC){
+				fat[*last] = i;
+			}
+			*last = i;
+			return i;
+		}
+	}
+
+	return -1;
+}
 int fs_write(int fd, void *buf, size_t count)
 {
 	/* TODO: Phase 4 */
-	/*Placeholder to remove warning*/
-	if(count == 0) return 0;
-	if(!buf) return -1;
-	return fd;
+	// /*Placeholder to remove warning*/
+	// if(count == 0) return 0;
+	// if(!buf) return -1;
+	// return fd;
+
+	if(!mounted || fd < 0 || fd >= FS_MAX_FD || !fd_table[fd].in_use || buf == NULL){
+		return -1;
+	}
+
+	struct file_descriptor *file = &fd_table[fd];
+	struct root_dir_entry *entry = NULL;
+	for(int i = 0; i < FS_FILE_MAX_COUNT; i++){
+		if(strncmp(root_dir[i].filename, file->filename, FS_FILENAME_LEN) == 0){
+			entry = &root_dir[i];
+			break;
+		}
+	}
+
+	if(!entry){
+		return -1;
+	}
+
+	size_t bytes_written = 0;
+	const char *char_buf = (const char *)buf;
+	char block_buf[BLOCK_SIZE];
+	uint16_t last;
+	
+	if(entry->first_block == FAT_EOC){
+		
+		if(allocate_new_block(&last) == -1){
+			return -1;
+		}
+		entry->first_block = last;
+	}
+
+	
+
+	while(fat[last] != FAT_EOC){
+		last = fat[last];
+	}
+
+	while(bytes_written < count){
+		int block_index = get_data_block_index(entry->first_block, file->offset);
+
+		if(block_index == -1){
+			
+
+			if(allocate_new_block(&last) == -1){
+				break;
+			}
+
+			block_index = last;
+			
+		}
+
+		block_read(sb.data_start_idx + block_index, block_buf);
+		size_t block_offset = file->offset % BLOCK_SIZE;
+		size_t to_write = BLOCK_SIZE - block_offset;
+
+
+		if(to_write > count - bytes_written){
+			to_write = count - bytes_written;
+		}
+
+
+		memcpy(block_buf + block_offset, char_buf + bytes_written, to_write);
+		block_write(sb.data_start_idx + block_index, block_buf);
+
+		file->offset += to_write;
+		bytes_written += to_write;
+
+	
+	}
+
+	if(file->offset > entry->size){
+		entry->size = file->offset;
+	}
+
+	
+
+	return bytes_written;
+
+
 }
 
 int fs_read(int fd, void *buf, size_t count)
 {
 	/* TODO: Phase 4 */
-	/*Placeholder to remove warning*/
-	if(count == 0) return 0;
-	if(!buf) return -1;
-	return fd;
+	// 	/*Placeholder to remove warning*/
+	// 	if(count == 0) return 0;
+	// 	if(!buf) return -1;
+	// 	return fd;
+
+	if(!mounted || fd < 0 || fd >= FS_MAX_FD || !fd_table[fd].in_use || buf == NULL){
+		return -1;
+	}
+
+	struct file_descriptor *file = &fd_table[fd];
+	struct root_dir_entry *entry = NULL;
+
+	for(int i = 0; i < FS_FILE_MAX_COUNT; i++){
+		if(strncmp(root_dir[i].filename, file->filename, FS_FILENAME_LEN) == 0){
+			entry = &root_dir[i];
+			break;
+		}
+	}
+
+	if(!entry){
+		return -1;
+	}
+
+	if(file->offset >= entry->size){
+		return 0;
+	}
+
+	if(file->offset + count > entry->size){
+		count = entry->size - file->offset;
+	}
+
+	size_t bytes_read = 0;
+	char *char_buf = (char *)buf;
+	char block_buf[BLOCK_SIZE];
+
+
+	while(bytes_read < count){
+		int block_index = get_data_block_index(entry->first_block, file->offset);
+		if(block_index == -1){
+			break;
+		}
+
+		block_read(sb.data_start_idx + block_index, block_buf);
+		size_t block_offset = file->offset % BLOCK_SIZE;
+		size_t to_read = BLOCK_SIZE - block_offset;
+
+		if(to_read > count - bytes_read){
+			to_read = count - bytes_read;
+		}
+
+		memcpy(char_buf + bytes_read, block_buf + block_offset, to_read);
+
+		file->offset += to_read;
+		bytes_read += to_read;
+
+
+	}
+
+
+	return bytes_read;
+
 }
